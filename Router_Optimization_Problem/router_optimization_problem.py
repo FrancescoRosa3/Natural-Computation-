@@ -48,7 +48,7 @@ class Clonalg:
 
         # Set population
         self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, self.num_clients)
-        #self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, 20)
+        #self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, 10)
         self.results = np.zeros((3, self.max_it))  # 3: max, min and average
 
 
@@ -85,14 +85,22 @@ class Clonalg:
     # Methods for the optimization procedure
     def normalize(self, d):
         dmax = np.amax(d)
-        return np.apply_along_axis(lambda di: di / dmax, 0, d)
+        return np.apply_along_axis(lambda di: 1-(di / dmax), 0, d)
 
-    def compute_affinity(self, population):
+    def compute_affinity(self, population, population_affinity=None, clonated_flags=None):
         affinities = []
-        for configuration in population:
+        for (i, configuration) in enumerate(population):
             # add source
             configuration.append(self.source)
-            affinities.append(self.evaluation(self.c_ap, self.c_w, configuration, self.clients_list))
+            if(clonated_flags is not None and clonated_flags[i] == True):
+                # clones that were mutated
+                affinities.append(self.evaluation(self.c_ap, self.c_w, configuration, self.clients_list))
+            elif clonated_flags is not None and clonated_flags[i] == False and population_affinity is not None:
+                # clones that were not mutated
+                affinities.append(population_affinity[i])
+            else:
+                # affinity for the beginnig population
+                affinities.append(self.evaluation(self.c_ap, self.c_w, configuration, self.clients_list))
             # remove source
             configuration.pop(len(configuration)-1)
         return affinities
@@ -127,6 +135,7 @@ class Clonalg:
         return coordinate
 
     def mutation(self, clones_to_mutate, affinities):
+        mutated_flags = [False for i in range(len(clones_to_mutate))]
         for (i, config) in enumerate(clones_to_mutate):
             # print(i, len(config))
             # compute mutation rate
@@ -136,6 +145,7 @@ class Clonalg:
                 continue
             
             # mutate coordinate for each router in config
+            mutated_flags[i] = True
             for router in config:
                 delta =  router.pos[0] * alpha * np.random.choice([0.01, 100])
                 router.pos[0] = self.mutate_coordinate(router.pos[0], delta, self.x_min, self.x_max)
@@ -152,13 +162,14 @@ class Clonalg:
                 if(len(config) > 1):
                     index = int(np.random.uniform(len(config)-1))
                     config.pop(index)
-        return clones_to_mutate
+        return clones_to_mutate, mutated_flags
 
-    def select_clones(self, population, fitness):
+    def select_clones(self, population, affinities):
         # multimodal: select the best clone for each antibody and generate new population
         for i in range(0, self.N):
-            best = np.argmin(fitness[i * self.nc: i * self.nc + self.nc])
+            best = np.argmin(affinities[i * self.nc: i * self.nc + self.nc])
             self.population[i] = population[best]
+            self.affinities[i] = affinities[best]
 
     def replace(self):
         if self.n2 == 0:
@@ -169,10 +180,11 @@ class Clonalg:
         while t < self.max_it:
             print("Iteration ", t)
             # compute affinity
-            self.affinities = self.compute_affinity(self.population)
+            if(t==1):
+                self.affinities = self.compute_affinity(self.population)
             # store results
-            self.results[0][t] = np.amin(self.affinities)
-            self.results[1][t] = np.amax(self.affinities)
+            self.results[0][t] = np.amin(self.affinities) # best
+            self.results[1][t] = np.amax(self.affinities) # worst
             self.results[2][t] = np.average(self.affinities)
             print("Best ", self.results[0][t], "\nAverage ",  self.results[2][t], "\nWorst ",  self.results[1][t])
             # selection
@@ -180,10 +192,10 @@ class Clonalg:
             # clone
             clones, affinities_clones = self.clone(population_select, affinities_select)
             # mutation
-            affinities_clones = self.normalize(affinities_clones)
-            clones_mutated = self.mutation(clones, affinities_clones)
+            affinities_clones_norm = self.normalize(affinities_clones)
+            clones_mutated, clonated_flags = self.mutation(clones, affinities_clones_norm)
             # clone affinities
-            affinities_clones = self.compute_affinity(clones_mutated)
+            affinities_clones = self.compute_affinity(clones_mutated, affinities_clones, clonated_flags)
             # select best mutated clones
             self.select_clones(clones_mutated, affinities_clones)
             # replace
@@ -198,8 +210,8 @@ class Clonalg:
         plt.show()
 
     def result(self):
-        b = self.fitness.argmax(axis=0)
-        return (self.population[b], self.fitness[b] * (-1))
+        b = self.fitness.argmin(axis=0)
+        return (self.population[b], self.affinities[b] * (-1))
 
 # compute the list of clients that are not covered
 def clients_not_covered(router, clients):
