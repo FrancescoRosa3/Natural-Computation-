@@ -7,6 +7,7 @@ from scipy.spatial import distance
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
 
+import copy 
 # class representing a router
 class Router:
 
@@ -47,7 +48,7 @@ class Clonalg:
 
         # Set population
         self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, self.num_clients)
-        #self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, 10)
+        #self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, 20)
         self.results = np.zeros((3, self.max_it))  # 3: max, min and average
 
 
@@ -89,10 +90,33 @@ class Clonalg:
     def compute_affinity(self, population):
         affinities = []
         for configuration in population:
+            # add source
             configuration.append(self.source)
-            affinities.append(self.evaluation(self.c_ap, self.c_w, configuration))
+            affinities.append(self.evaluation(self.c_ap, self.c_w, configuration, self.clients_list))
+            # remove source
             configuration.pop(len(configuration)-1)
         return affinities
+
+    def select(self, population, affinities):
+        # if n1 is equal N, then no selection is required
+        if self.N == self.n1:
+            return population, affinities
+
+        indexes = affinities.argsort()[:self.n1]
+        # select the n1 highest affinities
+        return population[indexes], affinities[indexes]
+
+    def clone(self, population_to_clone, affinities_to_clone):
+        affinities_clones = np.zeros(len(affinities_to_clone) * self.nc)
+        clones = []
+        for i, config_to_clone in enumerate(population_to_clone):
+            #print(i)
+            for j in range(i * self.nc, i * self.nc + self.nc):
+                clones.append(copy.deepcopy(config_to_clone))
+                affinities_clones[j] = affinities_to_clone[i]
+            # i += self.nc
+
+        return clones, affinities_clones
 
     def mutate_coordinate(self, coordinate, delta, lower_bound, upper_bound):
         pb = np.random.choice([0, 1])
@@ -100,12 +124,11 @@ class Clonalg:
             coordinate = math.fmod(coordinate + delta, upper_bound)
         else:
             coordinate = math.fmod(coordinate - delta, abs(lower_bound))
-        
         return coordinate
 
     def mutation(self, clones_to_mutate, affinities):
         for (i, config) in enumerate(clones_to_mutate):
-            print(i, len(config))
+            # print(i, len(config))
             # compute mutation rate
             alpha = np.exp(-self.p * affinities[i])
             pb = np.random.uniform(0, 1)
@@ -131,6 +154,15 @@ class Clonalg:
                     config.pop(index)
         return clones_to_mutate
 
+    def select_clones(self, population, fitness):
+        # multimodal: select the best clone for each antibody and generate new population
+        for i in range(0, self.N):
+            best = np.argmin(fitness[i * self.nc: i * self.nc + self.nc])
+            self.population[i] = population[best]
+
+    def replace(self):
+        if self.n2 == 0:
+            return self.population
 
     def clonalg_opt(self):
         t = 1
@@ -144,14 +176,18 @@ class Clonalg:
             self.results[2][t] = np.average(self.affinities)
             print("Best ", self.results[0][t], "\nAverage ",  self.results[2][t], "\nWorst ",  self.results[1][t])
             # selection
-
+            population_select, affinities_select = self.select(self.population, self.affinities)
             # clone
-
+            clones, affinities_clones = self.clone(population_select, affinities_select)
             # mutation
-            self.affinities = self.normalize(self.affinities)
-            self.population = self.mutation(self.population, self.affinities)
+            affinities_clones = self.normalize(affinities_clones)
+            clones_mutated = self.mutation(clones, affinities_clones)
+            # clone affinities
+            affinities_clones = self.compute_affinity(clones_mutated)
+            # select best mutated clones
+            self.select_clones(clones_mutated, affinities_clones)
             # replace
-
+            self.replace()
             t = t + 1
 
     def graph(self):
@@ -165,11 +201,27 @@ class Clonalg:
         b = self.fitness.argmax(axis=0)
         return (self.population[b], self.fitness[b] * (-1))
 
-def compute_total_wire_length(configuration):
+# compute the list of clients that are not covered
+def clients_not_covered(router, clients):
+    clients_not_covered_by_router = []
+    # for each client
+    for client in clients:
+        # compute the distance between router and client
+        client_router_distance = distance.euclidean(client, router.pos)
+        if client_router_distance > router.r_sig:
+            # client not covered
+            clients_not_covered_by_router.append(client)
+
+    return clients_not_covered_by_router
+
+def compute_coverage(configuration, clients):
     # compute the graph
     graph = []
     #print("Number of routers: ", len(configuration))
+    number_of_clients = len(clients)
     for i in range(len(configuration)):
+        # find the clients that are not covered
+        clients = clients_not_covered(configuration[i], clients)
         connection_node = [0 for k in range(0, i)]
         for j in range(i, len(configuration)):
             connection_node.append(configuration[i].compute_distance(configuration[j]))
@@ -184,18 +236,21 @@ def compute_total_wire_length(configuration):
         for j in range(len(mst[0])):
             distance = distance + mst[i][j]
     #print("Total distance: ", distance)
-    return distance
+    # number of clientes
+    number_clients_convered = number_of_clients - len(clients)
+    return distance, number_clients_convered
 
 
-def wires_cost(c_ap, c_w, configuration):
+def cost_function(c_ap, c_w, configuration, clients):
     # C = C_AP + C_W = n_ap * C_ap + C_w * Sum(L_ij)
     # first term
     n_ap = len(configuration)
     C_AP = n_ap * c_ap
     # second term
-    total_wire_length = compute_total_wire_length(configuration)
+    total_wire_length, number_clients_convered = compute_coverage(configuration, clients)
     C_W = c_w * total_wire_length
-    return (C_AP + C_W)
+
+    return (C_AP + C_W - number_clients_convered)
 
 
 def main():
@@ -203,7 +258,7 @@ def main():
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     np.random.seed(1)
-    clonalg = Clonalg(max_it=10, n1=50, n2=0, p=5, beta=0.2, evaluation=wires_cost, 
+    clonalg = Clonalg(max_it=10, n1=50, n2=0, p=2, beta=0.2, evaluation=cost_function, 
                      filename_client=dir_path+"/coord200.txt", r_sig = 30, c_w=1, c_ap=1,
                      source_x=0, source_y=0)
     clonalg.clonalg_opt()
