@@ -5,6 +5,7 @@ import math
 from scipy.spatial import distance
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
+
 # class representing a router
 class Router:
 
@@ -16,7 +17,8 @@ class Router:
         return distance.euclidean(self.pos, router.pos)
 
 class Clonalg:
-    def __init__(self, max_it, n1, n2, p, beta, evaluation, filename_client, r_sig, c_w, c_ap):
+
+    def __init__(self, max_it, n1, n2, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, source_x, source_y):
         # algorithm parameters
         self.max_it = max_it
         self.N = n1
@@ -29,7 +31,6 @@ class Clonalg:
 
         # support attribute
         self.filename_client = filename_client
-
         # optimization function parameters
         self.c_w = c_w
         self.c_ap = c_ap
@@ -40,12 +41,14 @@ class Clonalg:
         print("Number of clients: ", self.num_clients)
         self.compute_position_limits()
 
+        # Set Source
+        self.source = Router(source_x, source_y, r_sig)
+
         # Set population
-        #self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, self.num_clients)
-        self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, 10)
+        self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, self.num_clients)
+        #self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, 10)
         self.results = np.zeros((3, self.max_it))  # 3: max, min and average
 
-        evaluation([self.c_ap, self.c_w, self.population[0]])
 
     def create_client_list(self, filename):
         clients = []
@@ -66,80 +69,88 @@ class Clonalg:
         population = []
         for i in range(population_dim):
             conf = []
-            num_router = np.random.choice(max_number_router)
-            for j in range(num_router):
-                x = np.random.uniform(low=x_min, high=x_max)
-                y = np.random.uniform(low=y_min, high=y_max)
-                router = Router(x, y, r_sig)
-                conf.append(router)
+            num_router = np.random.uniform(low=1, high=max_number_router)
+            for j in range(int(num_router)):
+                conf.append(self.create_router(x_min, x_max, y_min, y_max, r_sig))
             population.append(conf)
         return population
 
-        
+    def create_router(self, x_min, x_max, y_min, y_max, r_sig):
+        x = np.random.uniform(low=x_min, high=x_max)
+        y = np.random.uniform(low=y_min, high=y_max)
+        return Router(x, y, r_sig)
 
-    def select(self, population, fitness):
-        # if n1 is equal N, then no selection is required
-        if self.N == self.n1:
-            return population, fitness
-
-        indexes = fitness.argsort()[-self.n1::][::-1]
-        # select the n1 highest fitness
-        return population[indexes], fitness[indexes]
-
-    def select_clones(self, population, fitness):
-        # multimodal: select the best clone for each antibody and generate new population
-        for i in range(0, self.N, self.nc):
-            best = np.argmax(fitness[i * self.nc: i * self.nc + self.nc])
-            self.population[i] = population[best]
-
-    def clone(self, antibodies, fitness):
-        fitness_clones = np.zeros(len(antibodies) * self.nc)
-        clones = []
-        for i, antibody in enumerate(antibodies):
-            for j in range(i * self.nc, i * self.nc + self.nc):
-                clones.append(antibody)
-                fitness_clones[j] = fitness[i]
-            i += self.nc
-
-        return clones, fitness_clones
-
+    # Methods for the optimization procedure
     def normalize(self, d):
         dmax = np.amax(d)
         return np.apply_along_axis(lambda di: di / dmax, 0, d)
 
-    def mutation(self, clones, fitness):
-        for (i, clone) in enumerate(clones):
-            alpha = np.exp(-self.p * fitness[i])
+    def compute_affinity(self, population):
+        affinities = []
+        for configuration in population:
+            configuration.append(self.source)
+            affinities.append(self.evaluation(self.c_ap, self.c_w, configuration))
+            configuration.pop(len(configuration)-1)
+        return affinities
+
+    def mutate_coordinate(self, coordinate, delta, lower_bound, upper_bound):
+        pb = np.random.choice([0, 1])
+        if pb == 1:
+            coordinate = math.fmod(coordinate + delta, upper_bound)
+        else:
+            coordinate = math.fmod(coordinate - delta, abs(lower_bound))
+        
+        return coordinate
+
+    def mutation(self, clones_to_mutate, affinities):
+        for (i, config) in enumerate(clones_to_mutate):
+            print(i, len(config))
+            # compute mutation rate
+            alpha = np.exp(-self.p * affinities[i])
             pb = np.random.uniform(0, 1)
             if (pb > alpha):
                 continue
+            
+            # mutate coordinate for each router in config
+            for router in config:
+                delta =  router.pos[0] * alpha * np.random.choice([0.01, 100])
+                router.pos[0] = self.mutate_coordinate(router.pos[0], delta, self.x_min, self.x_max)
+                delta = router.pos[1] * alpha * np.random.choice([0.01, 100])
+                router.pos[1] = self.mutate_coordinate(router.pos[1], delta, self.y_min, self.y_max)
 
-            delta = clones[i][0] * alpha * np.random.choice([0.01, 1])
-            clones[i][0] = math.fmod(clones[i][0] + delta, self.limits[1])
-            delta = clones[i][1] * alpha * np.random.choice([0.01, 1])
-            clones[i][1] = math.fmod(clones[i][1] + delta, self.limits[1])
-        return clones
+            # add or remove router
+            pb = np.random.choice([0, 1])
+            if pb == 1:
+                # add router
+                config.append(self.create_router(self.x_min, self.x_max, self.y_min, self.y_max, config[0].r_sig))
+            else:
+                # remove router
+                if(len(config) > 1):
+                    index = int(np.random.uniform(len(config)-1))
+                    config.pop(index)
+        return clones_to_mutate
 
-    def replace(self):
-        if self.n2 == 0:
-            return self.population
 
     def clonalg_opt(self):
         t = 1
         while t < self.max_it:
-            self.fitness = np.apply_along_axis(self.evaluation, 1, self.population)
+            print("Iteration ", t)
+            # compute affinity
+            self.affinities = self.compute_affinity(self.population)
+            # store results
+            self.results[0][t] = np.amin(self.affinities)
+            self.results[1][t] = np.amax(self.affinities)
+            self.results[2][t] = np.average(self.affinities)
+            print("Best ", self.results[0][t], "\nAverage ",  self.results[2][t], "\nWorst ",  self.results[1][t])
+            # selection
 
-            self.results[0][t] = np.amax(self.fitness)
-            self.results[1][t] = np.amin(self.fitness)
-            self.results[2][t] = np.average(self.fitness)
+            # clone
 
-            population_select, fitness_select = self.select(self.population, self.fitness)
-            clones, fitness_clones = self.clone(population_select, fitness_select)
-            fitness_clones_normalized = self.normalize(fitness_clones)
-            clones_mutated = self.mutation(clones, fitness_clones_normalized)
-            fitness_clones = np.apply_along_axis(self.evaluation, 1, clones_mutated)
-            self.select_clones(clones_mutated, fitness_clones)
-            self.replace()
+            # mutation
+            self.affinities = self.normalize(self.affinities)
+            self.population = self.mutation(self.population, self.affinities)
+            # replace
+
             t = t + 1
 
     def graph(self):
@@ -153,10 +164,10 @@ class Clonalg:
         b = self.fitness.argmax(axis=0)
         return (self.population[b], self.fitness[b] * (-1))
 
-def compute_total_distance(configuration):
+def compute_total_wire_length(configuration):
     # compute the graph
     graph = []
-    print("Number of routers: ", len(configuration))
+    #print("Number of routers: ", len(configuration))
     for i in range(len(configuration)):
         connection_node = [0 for k in range(0, i)]
         for j in range(i, len(configuration)):
@@ -171,22 +182,19 @@ def compute_total_distance(configuration):
     for i in range(len(mst)):
         for j in range(len(mst[0])):
             distance = distance + mst[i][j]
-    print("Total distance: ", distance)
+    #print("Total distance: ", distance)
     return distance
 
 
-def wires_cost(args):
-    configuration = args[2]
+def wires_cost(c_ap, c_w, configuration):
     # C = C_AP + C_W = n_ap * C_ap + C_w * Sum(L_ij)
     # first term
     n_ap = len(configuration)
-    c_ap = args[0]
     C_AP = n_ap * c_ap
     # second term
-    c_w = args[1]
-    total_distance = compute_total_distance(configuration)
-    C_W = c_w * total_distance
-    return (C_AP + C_W) * (-1)
+    total_wire_length = compute_total_wire_length(configuration)
+    C_W = c_w * total_wire_length
+    return (C_AP + C_W)
 
 
 def main():
@@ -194,10 +202,12 @@ def main():
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     np.random.seed(1)
-    clonalg = Clonalg(max_it=50, n1=50, n2=0, p=5, beta=0.2, evaluation=wires_cost, filename_client=dir_path+"/coord200.txt", r_sig = 30, c_w=1, c_ap=1)
-    #clonalg.clonalg_opt()
+    clonalg = Clonalg(max_it=10, n1=50, n2=0, p=5, beta=0.2, evaluation=wires_cost, 
+                     filename_client=dir_path+"/coord200.txt", r_sig = 30, c_w=1, c_ap=1,
+                     source_x=0, source_y=0)
+    clonalg.clonalg_opt()
     #print(clonalg.result())
-    #clonalg.graph()
+    clonalg.graph()
 
 
 if __name__ == '__main__':
