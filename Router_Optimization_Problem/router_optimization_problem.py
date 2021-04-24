@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+import networkx as nx
 
 from scipy.spatial import distance
 from scipy.sparse import csr_matrix
