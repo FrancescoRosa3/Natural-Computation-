@@ -20,12 +20,13 @@ class Router:
 
 class Clonalg:
 
-    def __init__(self, max_it, n1, n2, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, source_x, source_y):
+    def __init__(self, max_it, n1, n2, n3, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, source_x, source_y):
         # algorithm parameters
         self.max_it = max_it
         self.N = n1
         self.n1 = n1
         self.n2 = n2
+        self.n3 = n3
         self.beta = beta
         self.p = p
         self.nc = int(beta * self.N)  # Number of clones to be generate for each antibody
@@ -36,6 +37,7 @@ class Clonalg:
         # optimization function parameters
         self.c_w = c_w
         self.c_ap = c_ap
+        self.r_sig = r_sig
 
         # Set clients
         self.clients_list = self.create_client_list(self.filename_client)
@@ -48,7 +50,7 @@ class Clonalg:
 
         # Set population
         # self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, self.num_clients)
-        self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N)
+        self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, self.r_sig, self.N)
         self.results = np.zeros((3, self.max_it))  # 3: max, min and average
 
 
@@ -106,23 +108,35 @@ class Clonalg:
             configuration.pop(len(configuration)-1)
         return affinities
 
-    def select(self, population, affinities):
-        # if n1 is equal N, then no selection is required
-        if self.N == self.n1:
-            return population, affinities
+    def select(self, population, affinities, n):
+        
+        affinities = np.array(affinities)
+        # select the n highest affinities
+        indices = affinities.argsort()[:n]
+        temp_pop = []
+        for index in indices:
+            temp_pop.append(population[index])
+        print(affinities[indices])
+        
+        return temp_pop, affinities[indices]
 
-        indexes = affinities.argsort()[:self.n1]
-        # select the n1 highest affinities
-        return population[indexes], affinities[indexes]
+    def select_pop(self, population, affinities):
+        print("SELECTED POPULATION: ")
+        return self.select(population, affinities, self.n1)
 
-    def clone(self, population_to_clone, affinities_to_clone):
-        affinities_clones = np.zeros(len(affinities_to_clone) * self.nc)
+    def select_clones(self, population, affinities):
+        print("SELECTED CLONES: ")
+        return self.select(population, affinities, self.n2)
+
+    def clone(self, population_to_clone, affinities_to_clone, affinities_to_clone_norm):
+        affinities_clones = []
         clones = []
         for i, config_to_clone in enumerate(population_to_clone):
             #print(i)
-            for j in range(i * self.nc, i * self.nc + self.nc):
+            clones_per_conf = self.nc * affinities_to_clone_norm[i]
+            for j in range(int(clones_per_conf)):
                 clones.append(copy.deepcopy(config_to_clone))
-                affinities_clones[j] = affinities_to_clone[i]
+                affinities_clones.append(affinities_to_clone[i])
             # i += self.nc
 
         return clones, affinities_clones
@@ -165,20 +179,28 @@ class Clonalg:
                     config.pop(index)
         return clones_to_mutate, mutated_flags
 
-    def select_clones(self, population, affinities):
-        # multimodal: select the best clone for each antibody and generate new population
-        print("number of clones: " + str(len(population)))
-        for i in range(0, self.N):
-            best = np.argmin(affinities[i * self.nc: i * self.nc + self.nc])
-            best = (i * self.nc) + best
-            self.population[i] = population[best]
-            print("BEST: " + str(best) + " - " + str(affinities[best]))
-            self.affinities[i] = affinities[best]
-
-    def replace(self):
+    def replace(self, clones, clones_affinities, population, affinities):
         if self.n2 == 0:
             return self.population
+        
+        # replace clones
+        for i in reversed(range(-self.n2, 0)):
+            population[i] = clones[i]
+            affinities[i] = clones_affinities[i]
 
+        # replace random generated population
+        population[-self.n2-self.n3: -self.n2] = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, self.r_sig, self.n3)
+        affinities[-self.n2-self.n3: -self.n2] = self.compute_affinity(population[-self.n2-self.n3: -self.n2])
+        
+        
+        print("RANDOM POP: ")
+        print(len(affinities[-self.n2-self.n3: -self.n2]))
+        print(affinities[-self.n2-self.n3: -self.n2])
+        
+
+        self.population = population
+        self.affinities = affinities.tolist()
+             
     def clonalg_opt(self):
         self.t = 1
         while self.t < self.max_it:
@@ -192,19 +214,20 @@ class Clonalg:
             self.results[2][self.t] = np.average(self.affinities)
             print("Best ", self.results[0][self.t], "\nAverage ",  self.results[2][self.t], "\nWorst ",  self.results[1][self.t])
             # selection
-            population_select, affinities_select = self.select(self.population, self.affinities)
+            population_select, affinities_select = self.select_pop(self.population, self.affinities)
             # clone
-            clones, affinities_clones = self.clone(population_select, affinities_select)
+            affinities_select_norm = self.normalize(affinities_select)
+            clones, affinities_clones = self.clone(population_select, affinities_select, affinities_select_norm)
             # mutation
             affinities_clones_norm = self.normalize(affinities_clones)
             clones_mutated, clonated_flags = self.mutation(clones, affinities_clones_norm)
             # clone affinities
             affinities_clones = self.compute_affinity(clones_mutated, affinities_clones, clonated_flags)
             # select best mutated clones
-            self.select_clones(clones_mutated, affinities_clones)
+            selected_clones, selected_clones_affinity = self.select_clones(clones_mutated, affinities_clones)
             print("population length: " + str(len(self.population)))
             # replace
-            self.replace()
+            self.replace(selected_clones, selected_clones_affinity, population_select, affinities_select)
             self.ap_graph()
             self.t = self.t + 1
 
@@ -293,7 +316,7 @@ def cost_function(c_ap, c_w, configuration, clients):
     C_W = c_w * total_wire_length
     # print("number_clients_convered: " +  str(number_clients_convered))
     C = C_AP + C_W - number_clients_convered
-    print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(number_clients_convered) + " = " + str(C))
+    # print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(number_clients_convered) + " = " + str(C))
     return (C)
 
 
@@ -302,7 +325,7 @@ def main():
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     np.random.seed(10)
-    clonalg = Clonalg(max_it=20, n1=50, n2=0, p=2, beta=0.5, evaluation=cost_function, 
+    clonalg = Clonalg(max_it=20, n1=200, n2=70, n3=30, p=2, beta=0.2, evaluation=cost_function, 
                      filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=1,
                      source_x=0, source_y=0)
 
