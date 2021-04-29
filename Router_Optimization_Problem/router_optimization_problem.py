@@ -20,7 +20,7 @@ class Router:
 
 class Clonalg:
 
-    def __init__(self, max_it, n1, n2, n3, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, source_x, source_y):
+    def __init__(self, max_it, n1, n2, n3, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, c_cl_ap, source_x, source_y):
         # algorithm parameters
         self.max_it = max_it
         self.N = n1
@@ -37,6 +37,7 @@ class Clonalg:
         # optimization function parameters
         self.c_w = c_w
         self.c_ap = c_ap
+        self.c_cl_ap = c_cl_ap
         self.r_sig = r_sig
 
         # Set clients
@@ -97,13 +98,13 @@ class Clonalg:
             configuration.append(self.source)
             if(clonated_flags is not None and clonated_flags[i] == True):
                 # clones that were mutated
-                affinities.append(self.evaluation(self.c_ap, self.c_w, configuration, self.clients_list))
+                affinities.append(self.evaluation(self.c_ap, self.c_w, self.c_cl_ap, configuration, self.clients_list))
             elif clonated_flags is not None and clonated_flags[i] == False and population_affinity is not None:
                 # clones that were not mutated
                 affinities.append(population_affinity[i])
             else:
                 # affinity for the beginnig population
-                affinities.append(self.evaluation(self.c_ap, self.c_w, configuration, self.clients_list))
+                affinities.append(self.evaluation(self.c_ap, self.c_w, self.c_cl_ap, configuration, self.clients_list))
             # remove source
             configuration.pop(len(configuration)-1)
         return affinities
@@ -155,6 +156,8 @@ class Clonalg:
             # print(i, len(config))
             # compute mutation rate
             alpha = np.exp(-self.p * affinities[i])
+            # print("affinity: " + str(affinities[i]))
+            # print("alpha: " + str(alpha))
             pb = np.random.uniform(0, 1)
             if (pb > alpha):
                 continue
@@ -162,9 +165,13 @@ class Clonalg:
             # mutate coordinate for each router in config
             mutated_flags[i] = True
             for router in config:
-                delta =  router.pos[0] * alpha * np.random.choice([10, 100])
+                delta =  router.pos[0] * alpha * np.random.choice([0.01, 1])
+                # print("deltax: " + str(delta))
+                # delta = np.random.choice([10, 300])
                 router.pos[0] = self.mutate_coordinate(router.pos[0], delta, self.x_min, self.x_max)
-                delta = router.pos[1] * alpha * np.random.choice([10, 100])
+                delta =  router.pos[1] * alpha * np.random.choice([0.01, 1])
+                # print("deltay: " + str(delta))
+                # delta = np.random.choice([10, 300])
                 router.pos[1] = self.mutate_coordinate(router.pos[1], delta, self.y_min, self.y_max)
 
             # add or remove router
@@ -257,6 +264,7 @@ class Clonalg:
             ax.add_patch(circle)
 
         fig.savefig("Natural-Computation-\\best_conf_screens\\best_conf_" + str(self.t) + ".png")
+        plt.close()
         #plt.show()
 
     def result(self):
@@ -306,7 +314,7 @@ def compute_coverage(configuration, clients):
     return distance, number_clients_convered
 
 
-def cost_function(c_ap, c_w, configuration, clients):
+def cost_function(c_ap, c_w, c_cl_ap, configuration, clients):
     # C = C_AP + C_W = n_ap * C_ap + C_w * Sum(L_ij)
     # first term
     n_ap = len(configuration)
@@ -314,9 +322,12 @@ def cost_function(c_ap, c_w, configuration, clients):
     # second term
     total_wire_length, number_clients_convered = compute_coverage(configuration, clients)
     C_W = c_w * total_wire_length
+    #third term
+    C_client_per_router = (number_clients_convered)*c_cl_ap
+
     # print("number_clients_convered: " +  str(number_clients_convered))
-    C = C_AP + C_W - number_clients_convered
-    # print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(number_clients_convered) + " = " + str(C))
+    C = C_AP + C_W - C_client_per_router
+    print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(C_client_per_router) + "\t (" + str(number_clients_convered) + "/"  + str(n_ap) + "*" + str(c_cl_ap) + ") = " + str(C))
     return (C)
 
 
@@ -325,8 +336,8 @@ def main():
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     np.random.seed(10)
-    clonalg = Clonalg(max_it=20, n1=200, n2=70, n3=30, p=2, beta=0.2, evaluation=cost_function, 
-                     filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=1,
+    clonalg = Clonalg(max_it=20, n1=200, n2=70, n3=30, p=1, beta=0.02, evaluation=cost_function, 
+                     filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=1, c_cl_ap = 0.5,
                      source_x=0, source_y=0)
 
     clonalg.clonalg_opt()
