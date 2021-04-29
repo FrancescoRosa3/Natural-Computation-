@@ -8,6 +8,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
 
 import copy 
+import os
 # class representing a router
 class Router:
 
@@ -20,7 +21,7 @@ class Router:
 
 class Clonalg:
 
-    def __init__(self, max_it, n1, n2, n3, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, source_x, source_y):
+    def __init__(self, max_it, n1, n2, n3, p, beta, evaluation, filename_client, r_sig, c_w, c_ap, source_x, source_y, seed):
         # algorithm parameters
         self.max_it = max_it
         self.N = n1
@@ -48,6 +49,14 @@ class Clonalg:
         # Set Source
         self.source = Router(source_x, source_y, r_sig)
 
+        dir_path = os.path.dirname(os.path.realpath(__file__))
+        self.dir_name = str(dir_path+"/../screens/best_conf_screens_"+str(seed)+"_"+str(max_it)
+                                                                                    +"_"+str(n1)
+                                                                                    +"_"+str(n2)
+                                                                                    +"_"+str(n3)
+                                                                                    +"_"+str(p)
+                                                                                    +"_"+str(beta))
+        os.mkdir(self.dir_name)
         # Set population
         # self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, r_sig, self.N, self.num_clients)
         self.population = self.create_population(self.x_min, self.x_max, self.y_min, self.y_max, self.r_sig, self.N)
@@ -109,7 +118,7 @@ class Clonalg:
         return affinities
 
     def select(self, population, affinities, n):
-        
+
         affinities = np.array(affinities)
         # select the n highest affinities
         indices = affinities.argsort()[:n]
@@ -122,13 +131,38 @@ class Clonalg:
 
     def select_pop(self, population, affinities):
         print("SELECTED POPULATION: ")
+        if self.n1 == self.N and self.n2 == 0:
+            # print("Return the whole population")
+            print(affinities)
+            return  population, affinities
+
         return self.select(population, affinities, self.n1)
 
     def select_clones(self, population, affinities):
-        print("SELECTED CLONES: ")
+        # print("SELECTED CLONES: ")
+        if self.n2 == 0:
+            print("Replace the best clones in the population")
+            # multimodal: select the best clone for each antibody and generate new population
+            for i in range(0, self.N):
+                best = np.argmin(affinities[i * self.nc: i * self.nc + self.nc])
+                self.population[i] = population[best+(i * self.nc)]
+                self.affinities[i] = affinities[best+(i * self.nc)]
+            return self.population, self.affinities
+
         return self.select(population, affinities, self.n2)
 
     def clone(self, population_to_clone, affinities_to_clone, affinities_to_clone_norm):
+
+        if self.n1 == self.N and self.n2 == 0:
+            # print("Generating clones for each element")
+            affinities_clones = np.zeros(len(population_to_clone) * self.nc)
+            clones = []
+            for i, config_to_clone in enumerate(population_to_clone):
+                for j in range(i * self.nc, i * self.nc + self.nc):
+                    clones.append(copy.deepcopy(config_to_clone))
+                    affinities_clones[j] = affinities_to_clone[i]
+            return clones, affinities_clones
+        
         affinities_clones = []
         clones = []
         for i, config_to_clone in enumerate(population_to_clone):
@@ -156,6 +190,7 @@ class Clonalg:
             # compute mutation rate
             alpha = np.exp(-self.p * affinities[i])
             pb = np.random.uniform(0, 1)
+            #print(alpha, affinities[i])
             if (pb > alpha):
                 continue
             
@@ -168,11 +203,11 @@ class Clonalg:
                 router.pos[1] = self.mutate_coordinate(router.pos[1], delta, self.y_min, self.y_max)
 
             # add or remove router
-            pb = np.random.choice([0, 1])
+            pb = np.random.choice([0, 1, 2])
             if pb == 1:
                 # add router
                 config.append(self.create_router(self.x_min, self.x_max, self.y_min, self.y_max, config[0].r_sig))
-            else:
+            elif pb == 0:
                 # remove router
                 if(len(config) > 1):
                     index = int(np.random.uniform(len(config)-1))
@@ -232,15 +267,17 @@ class Clonalg:
             self.t = self.t + 1
 
     def result_graph(self):
+        fig, ax = plt.subplots()
         plt.plot(self.results[0], label="Best evaluation")
         plt.plot(self.results[1], label="Worst evaluation")
         plt.plot(self.results[2], label="Average")
         plt.legend(loc='best')
-        plt.show()
-
+        fig.savefig(self.dir_name+"/final_" + str(self.t) + ".png")
+        # plt.show()
+        plt.close()
     def get_best_conf(self):
         best_conf_index = self.affinities.index(min(self.affinities))
-        return self.population[best_conf_index]
+        return self.population[best_conf_index], min(self.affinities), best_conf_index
 
     def ap_graph(self, configuration = None):
 
@@ -249,16 +286,18 @@ class Clonalg:
         for client in self.clients_list:
             plt.scatter(client[0], client[1], s=4, c='red')
         
-        conf = self.get_best_conf()
+        conf, affinity, best_index = self.get_best_conf()
+        plt.title(label = "Affinity: "+str(affinity)+" #Router: "+str(len(conf)) + " Configuration index: " + str(best_index))
         for router in conf:
             plt.scatter(router.pos[0], router.pos[1], c='green')
             circle = plt.Circle((router.pos[0], router.pos[1]), router.r_sig, color='b', fill=False)
             ax = plt.gca()
             ax.add_patch(circle)
 
-        fig.savefig("Natural-Computation-\\best_conf_screens\\best_conf_" + str(self.t) + ".png")
-        #plt.show()
-
+        dir_path = os.path.dirname(os.path.realpath(__file__))
+        fig.savefig(self.dir_name+"/best_conf_" + str(self.t) + ".png")
+        plt.close()
+        
     def result(self):
         b = self.fitness.argmin(axis=0)
         return (self.population[b], self.affinities[b] * (-1))
@@ -269,7 +308,10 @@ def clients_not_covered(router, clients):
     # for each client
     for client in clients:
         # compute the distance between router and client
-        client_router_distance = distance.euclidean(client, router.pos)
+        try:
+            client_router_distance = distance.euclidean(client, router.pos)
+        except:
+            print(router.pos, client)
         if client_router_distance > router.r_sig:
             # client not covered
             clients_not_covered_by_router.append(client)
@@ -315,23 +357,24 @@ def cost_function(c_ap, c_w, configuration, clients):
     total_wire_length, number_clients_convered = compute_coverage(configuration, clients)
     C_W = c_w * total_wire_length
     # print("number_clients_convered: " +  str(number_clients_convered))
-    C = C_AP + C_W - number_clients_convered
+    C = C_AP + C_W - 10*number_clients_convered
     # print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(number_clients_convered) + " = " + str(C))
     return (C)
 
 
 def main():
-    import os 
     dir_path = os.path.dirname(os.path.realpath(__file__))
+    seed = 10
+    for i in range(10):
+        seed = seed + 100
+        np.random.seed(seed)
+        clonalg = Clonalg(max_it=20, n1=50, n2=0, n3=0, p=0.7, beta=0.3, evaluation=cost_function, 
+                        filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=5,
+                        source_x=0, source_y=0, seed=seed)
 
-    np.random.seed(10)
-    clonalg = Clonalg(max_it=20, n1=200, n2=70, n3=30, p=2, beta=0.2, evaluation=cost_function, 
-                     filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=1,
-                     source_x=0, source_y=0)
-
-    clonalg.clonalg_opt()
-    #print(clonalg.result())
-    clonalg.result_graph()
+        clonalg.clonalg_opt()
+        #print(clonalg.result())
+        clonalg.result_graph()
     
 
 
