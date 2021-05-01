@@ -323,11 +323,11 @@ def cost_function(c_ap, c_w, c_cl_ap, configuration, clients):
     total_wire_length, number_clients_convered = compute_coverage(configuration, clients)
     C_W = c_w * total_wire_length
     #third term
-    C_client_per_router = (number_clients_convered)*c_cl_ap
+    C_client_per_router = (number_clients_convered/n_ap)*c_cl_ap
 
     # print("number_clients_convered: " +  str(number_clients_convered))
-    C = C_AP + C_W - C_client_per_router
-    print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(C_client_per_router) + "\t (" + str(number_clients_convered) + "/"  + str(n_ap) + "*" + str(c_cl_ap) + ") = " + str(C))
+    C = C_AP + C_W - (number_clients_convered*c_cl_ap)
+    # print("cost function: " + str(C_AP) + " + " + str(C_W) + " - " + str(C_client_per_router) + "\t (" + str(number_clients_convered) + "/"  + str(n_ap) + "*" + str(c_cl_ap) + ") = " + str(C))
     return (C)
 
 
@@ -337,7 +337,7 @@ def main():
 
     np.random.seed(10)
     clonalg = Clonalg(max_it=20, n1=200, n2=70, n3=30, p=1, beta=0.02, evaluation=cost_function, 
-                     filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=1, c_cl_ap = 0.5,
+                     filename_client=dir_path+"/coord200.txt", r_sig = 100, c_w=0.01, c_ap=5, c_cl_ap =10,
                      source_x=0, source_y=0)
 
     clonalg.clonalg_opt()
